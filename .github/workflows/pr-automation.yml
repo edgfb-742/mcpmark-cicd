@@ -1,0 +1,243 @@
+name: PR Automation Workflow
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  code-quality:
+    name: code-quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        id: eslint
+        run: |
+          eslint_output=$(npm run lint 2>&1)
+          echo "eslint_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$eslint_output" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Run Prettier checks
+        id: prettier
+        run: |
+          prettier_output=$(npx prettier --check . 2>&1)
+          echo "prettier_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$prettier_output" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post Code Quality Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { eslint_output, prettier_output } = ${{ steps.eslint.outputs }};
+            const commentBody = `
+            ## Code Quality Report
+            
+            ### ESLint Results
+            \`\`\`
+            ${eslint_output}
+            \`\`\`
+            
+            ### Prettier Results
+            \`\`\`
+            ${prettier_output}
+            \`\`\`
+            `;
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+  testing-suite:
+    name: testing-suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run test suite with coverage
+        id: tests
+        run: |
+          test_output=$(npm test -- --coverage 2>&1)
+          echo "test_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$test_output" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post Test Coverage Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { test_output } = ${{ steps.tests.outputs }};
+            const commentBody = `
+            ## Test Coverage Report
+            
+            ### Test Results & Coverage
+            \`\`\`
+            ${test_output}
+            \`\`\`
+            `;
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+
+  security-scan:
+    name: security-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run dependency vulnerability check
+        id: npm-audit
+        run: |
+          audit_output=$(npm audit 2>&1)
+          echo "audit_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$audit_output" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Scan for secrets
+        id: secret-scan
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          secret_output=$(git secrets --scan 2>&1 || true)
+          echo "secret_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$secret_output" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post Security Scan Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { audit_output, secret_output } = ${{ steps.npm-audit.outputs }};
+            const commentBody = `
+            ## Security Scan Report
+            
+            ### Dependencies Vulnerabilities (npm audit)
+            \`\`\`
+            ${audit_output}
+            \`\`\`
+            
+            ### Secrets Scan Results
+            \`\`\`
+            ${secret_output}
+            \`\`\`
+            `;
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+  build-validation:
+    name: build-validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        id: build
+        run: |
+          build_output=$(npm run build 2>&1)
+          echo "build_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$build_output" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Validate endpoints (example)
+        id: endpoint-check
+        run: |
+          # Example: Start the build and check endpoints (adjust based on your app)
+          if [ -d "build" ]; then
+            endpoint_output="Build directory exists. Endpoint validation would run here for your specific application."
+          else
+            endpoint_output="Build directory not found - endpoint validation skipped."
+          fi
+          echo "endpoint_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$endpoint_output" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create deployment preview artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/
+
+      - name: Post Build Validation
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { build_output, endpoint_output } = ${{ steps.build.outputs }};
+            const commentBody = `
+            ## Build Validation
+            
+            ### Build Results
+            \`\`\`
+            ${build_output}
+            \`\`\`
+            
+            ### Endpoint Validation
+            \`\`\`
+            ${endpoint_output}
+            \`\`\`
+            `;
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
